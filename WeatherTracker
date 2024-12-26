@@ -1,0 +1,257 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Adafruit_ILI9341.h>
+#include <XPT2046_Touchscreen.h>
+#include <DHT.h>
+
+
+const char* ssid = "Start Coffee & Tea L2";
+const char* password = "xincamon";
+
+#define dhttype DHT11
+#define dhtpin 14
+
+#define TFT_CS    15
+#define TFT_DC    2
+#define TFT_RST   4  
+#define TOUCH_CS  21
+#define TOUCH_IRQ 27 
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+XPT2046_Touchscreen ts(TOUCH_CS, TOUCH_IRQ); 
+DHT dht(dhtpin, dhttype);
+// Địa chỉ API của Open-Meteo
+String url;
+
+// Cấu trúc của 1 Quốc gia: Tên, Kinh độ, Vĩ độ
+struct Country {
+  String name;
+  float lat;
+  float lon;
+};
+
+Country countries[5] = {
+  {"VIETNAM", 10.7694, 106.6819},
+  {"USA", 40.6643, -73.9385},
+  {"JAPAN", 35.6894, 139.692},
+  {"INDIA", 19.0712, 72.8762},
+  {"GERMANY", 48.1369, 11.5753}
+};
+
+int countryIndex = -1;
+void displayMenu();
+void displayWeather(int countryIndex);
+void TempandHump();
+void setup() {
+  // Khởi tạo màn hình 
+  tft.begin();
+  tft.setRotation(0);  // Xoay màn hình theo chiều ngang 
+  tft.fillScreen(ILI9341_BLACK);
+
+  // Khởi tạo touchscreen
+  ts.begin();
+  ts.setRotation(0);  // Xoay cảm ứng theo chiều ngang
+  dht.begin();
+  // Kết nối Wi-Fi
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi!");
+
+  // Hiển thị menu quốc gia
+  displayMenu();
+}
+
+void loop() {
+  // Kiểm tra xem có chạm vào màn hình không
+  if (ts.touched()) {
+    TS_Point p = ts.getPoint();
+    int x = map(p.x, 300, 3800, 0, 240); // Chuyển đổi tọa độ raw X sang pixel
+    int y = map(p.y, 300, 3800, 0, 320); // Chuyển đổi tọa độ raw Y sang pixel
+    Serial.print("X: ");
+    Serial.print(x);
+    Serial.print(", Y: ");
+    Serial.println(y);
+
+
+    // Kiểm tra quốc gia được chọn dựa trên vị trí chạm
+
+     if(x > 0 && x < 240){
+
+      if (y >= 260 && y <= 290) {
+        tempandhump(); 
+        }
+
+      if (y >= 220 && y <= 250) {
+        displayWeather(0); // Vietnam
+        }
+
+     if (y >= 180 && y <= 210) {
+        displayWeather(1); // USA
+        }
+
+     if (y >= 140 && y <= 170) {
+        displayWeather(2); // India
+        }
+
+      if (y >= 100 && y <= 130) {
+        displayWeather(3); // Japan
+        }
+      
+      if(y >= 50 && y <=90 ) {
+        displayWeather(4); // Germany
+      }
+     }
+     
+    }
+  }
+
+void displayMenu() {
+  // Hiển thị tiêu đề
+  tft.setCursor(30, 10);
+  tft.setTextColor(ILI9341_RED);
+  tft.setTextSize(2);
+  tft.print("WEATHER TRACKER");
+  tft.setTextColor(ILI9341_WHITE);
+  tft.drawRect(0, 40, 240, 30, ILI9341_BLUE);
+  tft.setCursor(10, 50);
+  tft.print("TEMP AND HUMP");
+  // Hiển thị danh sách quốc gia
+  for (int i = 1; i <= 5; i++) {
+    tft.drawRect(0, 40 + (i * 40), 240, 30, ILI9341_BLUE);
+    tft.setCursor(10, 50 + (i * 40));
+    tft.print(countries[i-1].name);
+  }
+}
+
+void TempandHump()
+{
+float t = dht.readTemperature();
+float h = dht.readHumidity();
+
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(0, 40);
+  tft.print("Nhiet do: ");
+  tft.print(t);
+  tft.print(" C");
+  tft.setCursor(0, 80);
+  tft.print("Do am: ");
+  tft.print(h);
+  tft.print(" %");
+  
+  tft.fillRect(0, 280, 240, 30, ILI9341_BLUE);
+  tft.drawRect(0, 280, 240, 30, ILI9341_WHITE);
+  tft.setCursor(30, 290);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(2);
+  tft.print("Return to Menu");
+
+  while (true) {
+    if (ts.touched())
+    {
+      TS_Point p = ts.getPoint();
+      int x = map(p.x, 300, 3800, 0, 240);
+      int y = map(p.y, 300, 3800, 0, 320);
+
+      if (x > 0 && x < 230 && y > 20 && y < 50) 
+      {
+        tft.fillScreen(ILI9341_BLACK);
+        displayMenu();
+        break;
+      }
+    }
+  }
+}
+
+void displayWeather(int countryIndex) {
+  HTTPClient http;
+  url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(countries[countryIndex].lat) +
+        "&longitude=" + String(countries[countryIndex].lon) +
+        "&daily=temperature_2m_max,rain_sum&timezone=auto";
+
+  Serial.println(url);
+  http.begin(url);
+  int httpCode = http.GET();
+  http.setTimeout(15000);
+
+  if (httpCode > 0) {
+    Serial.println("HTTP request successful!");
+    String payload = http.getString();
+
+    DynamicJsonDocument doc(1024);    //Tạo một đối tượng tài liệu JSON động với dung lượng bộ nhớ 1024 byte
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (error) {
+      Serial.print("JSON deserialization failed: ");
+      Serial.println(error.c_str());
+      return;
+    }
+
+    if (!doc.containsKey("daily")) {
+      Serial.println("JSON does not contain 'daily' key");
+      return;
+    }
+    String date[7];
+    String maxTemp[7];
+    String Weather[7];
+
+    JsonObject daily = doc["daily"];
+    JsonArray timeArray = daily["time"]; // Lấy mảng thời gian
+    JsonArray tempMaxArray = daily["temperature_2m_max"]; // Lấy mảng nhiệt độ tối đa
+    JsonArray rainSumArray = daily["rain_sum"]; // Lấy mảng lượng mưa
+    
+    tft.fillScreen(ILI9341_BLACK);
+    tft.setCursor(20,0);
+    tft.setTextColor(ILI9341_RED);
+    tft.setTextSize(2);
+    tft.print("Country: " + countries[countryIndex].name);
+    tft.setTextColor(ILI9341_WHITE);
+
+     for (int i = 0; i < timeArray.size(); i++) {
+      String date = timeArray[i].as<String>();          // Lấy ngày dưới dạng chuỗi
+      float maxTemp = tempMaxArray[i].as<float>();      // Lấy nhiệt độ tối đa
+      float rain = rainSumArray[i].as<float>();         // Lấy tổng lượng mưa
+
+      tft.setCursor(0, 40 + (i * 20));
+      tft.setTextColor(ILI9341_WHITE);
+      tft.setTextSize(1);
+      tft.print(date + ": Temp: " + String(maxTemp, 1) + " C, Rain: " + String(rain, 1) + "mm");
+    }
+  }
+     else 
+  {
+    Serial.print("HTTP request failed. Error code: ");
+    Serial.println(httpCode);
+  }
+
+  http.end();
+
+  tft.fillRect(0, 280, 240, 30, ILI9341_BLUE);
+  tft.drawRect(0, 280, 240, 30, ILI9341_WHITE);
+  tft.setCursor(30, 290);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(2);
+  tft.print("Return to Menu");
+
+  while (true) {
+    if (ts.touched())
+    {
+      TS_Point p = ts.getPoint();
+      int x = map(p.x, 300, 3800, 0, 240);
+      int y = map(p.y, 300, 3800, 0, 320);
+
+      if (x > 0 && x < 230 && y > 20 && y < 50) 
+      {
+        tft.fillScreen(ILI9341_BLACK);
+        displayMenu();
+        break;
+      }
+    }
+  }
+}
